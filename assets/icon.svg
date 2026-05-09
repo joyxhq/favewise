@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Favewise">
+  <defs>
+    <linearGradient id="fw-bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#D88B6D"/>
+      <stop offset="1" stop-color="#C46A50"/>
+    </linearGradient>
+    <filter id="fw-shadow" x="-20%" y="-10%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="2.5" stdDeviation="2" flood-color="#5a2a1e" flood-opacity="0.18"/>
+    </filter>
+  </defs>
+  <!-- Rounded copper tile -->
+  <rect width="128" height="128" rx="28" fill="url(#fw-bg)"/>
+  <!-- Bookmark ribbon in warm cream -->
+  <path
+    d="M40 24 H88 C92.418 24 96 27.582 96 32 V108 C96 109.48 94.315 110.327 93.127 109.443 L64 87.75 L34.873 109.443 C33.685 110.327 32 109.48 32 108 V32 C32 27.582 35.582 24 40 24 Z"
+    fill="#FAF9F5"
+    filter="url(#fw-shadow)"/>
+  <!-- 4-point sparkle -->
+  <path
+    d="M64 48 L66.6 60.4 L79 63 L66.6 65.6 L64 78 L61.4 65.6 L49 63 L61.4 60.4 Z"
+    fill="#C46A50"/>
+</svg>

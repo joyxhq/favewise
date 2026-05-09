@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/joyxhq/favewise/blob/main/SECURITY.md
+    about: Please report suspected vulnerabilities privately instead of opening a public issue.
+  - name: Privacy question
+    url: https://github.com/joyxhq/favewise/blob/main/PRIVACY.md
+    about: Read the privacy policy and contact privacy@joyx.io for privacy-specific questions.

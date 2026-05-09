@@ -4,6 +4,7 @@ logs
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+pnpm-debug.log*
 lerna-debug.log*
 
 # Diagnostic reports (https://nodejs.org/api/report.html)
@@ -81,7 +82,6 @@ out
 # Nuxt.js build / generate output
 .nuxt
 dist
-.output
 
 # Gatsby files
 .cache/
@@ -92,8 +92,9 @@ dist
 # vuepress build output
 .vuepress/dist
 
-# vuepress v2.x temp directory
+# vuepress v2.x temp and cache directory
 .temp
+.cache
 
 # Sveltekit cache directory
 .svelte-kit/
@@ -125,9 +126,6 @@ dist
 # Stores VSCode versions used for testing VSCode extensions
 .vscode-test
 
-# pnpm
-.pnpm-store
-
 # yarn v3
 .pnp.*
 .yarn/*
@@ -137,7 +135,26 @@ dist
 !.yarn/sdks
 !.yarn/versions
 
-# Vite files
+# Vite logs files
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
-.vite/
+
+.output
+stats.html
+stats-*.json
+.wxt
+web-ext.config.ts
+
+# E2E smoke-drive artifacts (screenshots + logs)
+test-results/
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?

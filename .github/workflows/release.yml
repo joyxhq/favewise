@@ -1,0 +1,62 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  chrome-release:
+    name: Chrome release package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Type check
+        run: pnpm compile
+
+      - name: Unit tests
+        run: pnpm test
+
+      - name: Dependency audit
+        run: pnpm audit --audit-level moderate
+
+      - name: Build Chrome MV3 extension
+        run: pnpm build
+
+      - name: Create Chrome Web Store zip
+        run: pnpm zip
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p release
+          cp .output/favewise-*-chrome.zip release/
+          shasum -a 256 release/*.zip > release/SHA256SUMS.txt
+          ls -lh release/
+
+      - name: Extract release notes from changelog
+        run: node scripts/extract-release-notes.mjs CHANGELOG.md release-notes.md "$GITHUB_REF_NAME"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: release-notes.md
+          files: |
+            release/*.zip
+            release/SHA256SUMS.txt
