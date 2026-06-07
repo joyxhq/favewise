@@ -107,6 +107,10 @@ async function assertNoHorizontalOverflow(page, label) {
   }
 }
 
+async function countFolderPickerSelected(dialog) {
+  return dialog.locator('[data-fw-folder-picker-row][aria-selected="true"]').count()
+}
+
 async function assertSingleLineText(page, selector, label) {
   const metrics = await page.locator(selector).evaluateAll((els) => els
     .filter((el) => {
@@ -159,7 +163,7 @@ async function clickNav(page, view) {
 }
 
 async function injectLayoutFixture(page, seed) {
-  return page.evaluate(async ({ sandboxId }) => {
+  return page.evaluate(async ({ sandboxId, pathCleanIds, pathOtherIds }) => {
     const now = Date.now()
     const [root] = await chrome.bookmarks.getSubTree(sandboxId)
     const links = []
@@ -246,6 +250,23 @@ async function injectLayoutFixture(page, seed) {
       deadLinkCache: {},
       bookmarkUrlMap: Object.fromEntries(links.map((link) => [link.id, link.url])),
       duplicateGroups: [
+        {
+          id: 'e2e-dupe-imported-clean',
+          canonicalUrl: 'https://example.com/e2e-path-clean',
+          bookmarkIds: [
+            pathCleanIds.source,
+            pathCleanIds.imported,
+            pathCleanIds.importedNested,
+          ].filter((id) => snapshot[id]),
+        },
+        {
+          id: 'e2e-dupe-imported-other',
+          canonicalUrl: 'https://example.com/e2e-path-other',
+          bookmarkIds: [
+            pathOtherIds.source,
+            pathOtherIds.imported,
+          ].filter((id) => snapshot[id]),
+        },
         {
           id: 'e2e-dupe-github',
           canonicalUrl: 'https://github.com/',
@@ -377,6 +398,33 @@ async function main() {
       const created = await chrome.bookmarks.create({ parentId: sandbox.id, ...bm })
       linkIds.push(created.id)
     }
+    const imported = await chrome.bookmarks.create({ parentId: sandbox.id, title: 'Imported' })
+    const importedAgain = await chrome.bookmarks.create({ parentId: sandbox.id, title: 'Imported (1)' })
+    const pathCleanSource = await chrome.bookmarks.create({
+      parentId: sandbox.id,
+      title: 'Path Clean Target',
+      url: 'https://example.com/e2e-path-clean',
+    })
+    const pathCleanImported = await chrome.bookmarks.create({
+      parentId: imported.id,
+      title: 'Path Clean Target (Imported)',
+      url: 'https://example.com/e2e-path-clean',
+    })
+    const pathCleanImportedNested = await chrome.bookmarks.create({
+      parentId: importedAgain.id,
+      title: 'Path Clean Target (Imported 1)',
+      url: 'https://example.com/e2e-path-clean',
+    })
+    const pathOtherSource = await chrome.bookmarks.create({
+      parentId: sandbox.id,
+      title: 'Path Other Target',
+      url: 'https://example.com/e2e-path-other',
+    })
+    const pathOtherImported = await chrome.bookmarks.create({
+      parentId: imported.id,
+      title: 'Path Other Target (Imported)',
+      url: 'https://example.com/e2e-path-other',
+    })
 
     // Create one genuinely organized folder so the dashboard protection card
     // is present in the side-panel fixture. The production heuristic requires
@@ -397,8 +445,19 @@ async function main() {
       sandboxId: sandbox.id,
       emptyId: empty.id,
       organizedId: organized.id,
+      importedId: imported.id,
+      importedAgainId: importedAgain.id,
+      pathCleanIds: {
+        source: pathCleanSource.id,
+        imported: pathCleanImported.id,
+        importedNested: pathCleanImportedNested.id,
+      },
+      pathOtherIds: {
+        source: pathOtherSource.id,
+        imported: pathOtherImported.id,
+      },
       linkIds,
-      linkCount: urls.length,
+      linkCount: urls.length + 5,
     }
   })
   log(`  Seeded sandbox=${seed.sandboxId} with ${seed.linkCount} links + 1 empty subfolder`)
@@ -493,6 +552,97 @@ async function main() {
       log(`  FAIL: ${e.message}`)
       fatalFailures.push(`Nav ${view}: ${e.message}`)
     }
+  }
+
+  log('\n=== Duplicates path cleanup ===')
+  try {
+    await clickNav(page, 'duplicates')
+    await page.waitForTimeout(600)
+    const targetGroup = page.locator('[data-fw-duplicate-group-id="e2e-dupe-imported-clean"]').first()
+    if (!await targetGroup.isVisible({ timeout: 2000 }).catch(() => false)) {
+      throw new Error('path-clean duplicate group is not visible')
+    }
+    await targetGroup.locator('button[role="checkbox"]').first().click({ timeout: 2000 })
+    await page.waitForTimeout(150)
+    await page.locator('[data-fw-dup-path-cleanup]').first().click({ timeout: 2000 })
+    let dialog = page.locator('[role="alertdialog"]').first()
+    await dialog.waitFor({ state: 'visible', timeout: 3000 })
+
+    const rows = dialog.locator('[data-fw-folder-picker-row]')
+    const rowCount = await rows.count()
+    if (rowCount < 3) {
+      throw new Error(`expected at least 3 folder rows for gesture test, saw ${rowCount}`)
+    }
+    await rows.nth(0).click({ timeout: 2000 })
+    await rows.nth(2).click({ modifiers: ['Shift'], timeout: 2000 })
+    await page.waitForTimeout(100)
+    const rangeSelected = await countFolderPickerSelected(dialog)
+    if (rangeSelected !== 3) {
+      throw new Error(`shift range selection selected ${rangeSelected} rows instead of 3`)
+    }
+    await rows.nth(1).click({ modifiers: ['ControlOrMeta'], timeout: 2000 })
+    await page.waitForTimeout(100)
+    const discontiguousSelected = await countFolderPickerSelected(dialog)
+    if (discontiguousSelected !== 2) {
+      throw new Error(`cmd/ctrl interval toggle left ${discontiguousSelected} rows selected instead of 2`)
+    }
+    await dialog.locator('button', { hasText: /Cancel|取消/ }).first().click({ timeout: 2000 })
+    await dialog.waitFor({ state: 'hidden', timeout: 3000 })
+
+    await page.locator('[data-fw-dup-path-cleanup]').first().click({ timeout: 2000 })
+    dialog = page.locator('[role="alertdialog"]').first()
+    await dialog.waitFor({ state: 'visible', timeout: 3000 })
+    await dialog.locator('input').first().fill('Imported')
+    await page.waitForTimeout(150)
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A')
+    await page.waitForTimeout(100)
+    const selectedAfterSelectAll = await countFolderPickerSelected(dialog)
+    if (selectedAfterSelectAll !== 2) {
+      throw new Error(`cmd/ctrl+a selected ${selectedAfterSelectAll} filtered rows instead of 2`)
+    }
+    await dialog.locator('button', { hasText: /^Apply$/ }).first().click({ timeout: 2000 })
+    await page.waitForSelector('[data-fw-dup-folder-preview]', { timeout: 3000 })
+    await page.waitForTimeout(300)
+    const previewText = await page.locator('[data-fw-dup-folder-preview]').first().innerText()
+    if (!/1 groups?/.test(previewText) || !/2 to trash/.test(previewText)) {
+      throw new Error(`unexpected cleanup preview: ${previewText}`)
+    }
+    await page.screenshot({ path: path.join(RESULTS, 'view-duplicates-path-cleanup.png'), fullPage: true })
+    await page.locator('button', { hasText: /Resolve 1/ }).first().click({ timeout: 2000 })
+    await page.waitForSelector('[role="alertdialog"]', { timeout: 3000 })
+    await page.locator('[role="alertdialog"] button', { hasText: /Trash matching copies/ }).first().click({ timeout: 2000 })
+    await page.waitForTimeout(800)
+    const cleanupState = await page.evaluate(async ({ pathCleanIds }) => {
+      const scan = (await chrome.storage.local.get('favewise:latestScan'))['favewise:latestScan']
+      const groupIds = (scan?.duplicateGroups ?? []).map((g) => g.id)
+      const exists = async (id) => {
+        try {
+          await chrome.bookmarks.get(id)
+          return true
+        } catch {
+          return false
+        }
+      }
+      return {
+        groupIds,
+        sourceExists: await exists(pathCleanIds.source),
+        importedExists: await exists(pathCleanIds.imported),
+        importedNestedExists: await exists(pathCleanIds.importedNested),
+      }
+    }, seed)
+    if (cleanupState.groupIds.includes('e2e-dupe-imported-clean')) {
+      throw new Error(`resolved group still present: ${cleanupState.groupIds.join(', ')}`)
+    }
+    if (!cleanupState.groupIds.includes('e2e-dupe-imported-other')) {
+      throw new Error('unselected imported duplicate group was unexpectedly resolved')
+    }
+    if (!cleanupState.sourceExists || cleanupState.importedExists || cleanupState.importedNestedExists) {
+      throw new Error(`unexpected bookmark cleanup state: ${JSON.stringify(cleanupState)}`)
+    }
+    log('  ✓ selected Imported paths trashed only inside the selected duplicate group')
+  } catch (e) {
+    log(`  ERROR: ${e.message}`)
+    fatalFailures.push(`Duplicates path cleanup: ${e.message}`)
   }
 
   // Command palette — try Meta+K first (Mac convention) then Control+K

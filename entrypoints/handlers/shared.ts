@@ -1,5 +1,6 @@
 import { expandProtectedSubtree } from '~/shared/lib/protected-folders'
 import { getSettings } from '~/shared/storage'
+import { isStillDuplicateUrl } from '~/shared/services/duplicate-service'
 
 interface ErrorEntry { at: number; message: string }
 
@@ -81,8 +82,7 @@ export function isStillInDuplicateGroup(
   currentUrl: string | undefined,
   canonicalUrl: string | undefined,
 ): boolean {
-  if (!currentUrl || !canonicalUrl) return false
-  return currentUrl === canonicalUrl
+  return isStillDuplicateUrl(currentUrl, canonicalUrl)
 }
 
 export function hasValidDuplicateKeep(

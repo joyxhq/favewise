@@ -1,8 +1,12 @@
 import { describe, it, expect } from 'vitest'
 import {
+  buildFolderPathResolutionPreview,
+  buildFolderPathResolutions,
   findExactDuplicates,
+  isStillDuplicateUrl,
   pickNewest,
   pickOldest,
+  pickUniqueByDate,
 } from '~/shared/services/duplicate-service'
 import type { BookmarkRecord } from '~/shared/types'
 
@@ -87,6 +91,97 @@ describe('duplicate-service › URL normalization', () => {
     ])
     expect(groups).toHaveLength(1)
   })
+
+  it('validates current bookmarks against normalized duplicate URLs', () => {
+    expect(isStillDuplicateUrl(
+      'https://www.example.com/path/?utm_source=newsletter',
+      'https://example.com/path',
+    )).toBe(true)
+  })
+})
+
+describe('duplicate-service › folder path resolutions', () => {
+  const group = {
+    id: 'g1',
+    canonicalUrl: 'https://x.com/',
+    bookmarkIds: ['safe', 'imported', 'importedNested'],
+  }
+  const snapshot = {
+    safe: bm('safe', 'https://x.com/', { folderPath: ['Bookmarks Bar', 'Search & Tools'] }),
+    imported: bm('imported', 'https://x.com/', { folderPath: ['Bookmarks Bar', 'Imported'] }),
+    importedNested: bm('importedNested', 'https://x.com/', { folderPath: ['Bookmarks Bar', 'Imported', 'Search & Tools'] }),
+  }
+
+  it('can trash duplicates by selected imported paths even when dates do not help', () => {
+    const resolutions = buildFolderPathResolutions(
+      [group],
+      snapshot,
+      ['Bookmarks Bar/Imported', 'Bookmarks Bar/Imported/Search & Tools'],
+      'trash',
+    )
+
+    expect(resolutions).toEqual([{
+      groupId: 'g1',
+      keepBookmarkIds: ['safe'],
+      trashBookmarkIds: ['imported', 'importedNested'],
+    }])
+  })
+
+  it('skips trash-path groups that would not leave a keeper', () => {
+    const resolutions = buildFolderPathResolutions(
+      [group],
+      snapshot,
+      [
+        'Bookmarks Bar/Search & Tools',
+        'Bookmarks Bar/Imported',
+        'Bookmarks Bar/Imported/Search & Tools',
+      ],
+      'trash',
+    )
+
+    expect(resolutions).toEqual([])
+  })
+
+  it('keeps selected safe paths and trashes the rest', () => {
+    const resolutions = buildFolderPathResolutions(
+      [group],
+      snapshot,
+      ['Bookmarks Bar/Search & Tools'],
+      'keep',
+    )
+
+    expect(resolutions).toEqual([{
+      groupId: 'g1',
+      keepBookmarkIds: ['safe'],
+      trashBookmarkIds: ['imported', 'importedNested'],
+    }])
+  })
+
+  it('summarizes folder cleanup before destructive action', () => {
+    const resolutions = [{
+      groupId: 'g1',
+      keepBookmarkIds: ['safe'],
+      trashBookmarkIds: ['imported', 'importedNested'],
+    }]
+
+    expect(buildFolderPathResolutionPreview(resolutions, snapshot)).toEqual({
+      groupCount: 1,
+      keepCount: 1,
+      trashCount: 2,
+      items: [
+        {
+          id: 'imported',
+          title: 'Bookmark imported',
+          path: 'Bookmarks Bar / Imported',
+        },
+        {
+          id: 'importedNested',
+          title: 'Bookmark importedNested',
+          path: 'Bookmarks Bar / Imported / Search & Tools',
+        },
+      ],
+    })
+  })
 })
 
 describe('duplicate-service › pick helpers', () => {
@@ -108,5 +203,27 @@ describe('duplicate-service › pick helpers', () => {
 
   it('pickOldest returns the oldest dateAdded', () => {
     expect(pickOldest(group, map)).toBe('c')
+  })
+
+  it('pickUniqueByDate returns the only newest copy when unambiguous', () => {
+    expect(pickUniqueByDate(group, map, 'newest')).toEqual({
+      id: 'b',
+      ambiguous: false,
+      tiedIds: ['b'],
+    })
+  })
+
+  it('pickUniqueByDate refuses tied timestamps', () => {
+    const tied = new Map<string, BookmarkRecord>([
+      ['a', bm('a', 'https://x.com/', { dateAdded: now })],
+      ['b', bm('b', 'https://x.com/', { dateAdded: now })],
+      ['c', bm('c', 'https://x.com/', { dateAdded: now - 200 })],
+    ])
+
+    expect(pickUniqueByDate(group, tied, 'newest')).toEqual({
+      id: null,
+      ambiguous: true,
+      tiedIds: ['a', 'b'],
+    })
   })
 })

@@ -12,6 +12,7 @@ import {
   Sparkles,
   ArrowUp,
   ArrowDown,
+  Trash2,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import type { DuplicateGroup, BookmarkRecord } from '~/shared/types'
@@ -35,6 +36,14 @@ import { send } from '~/shared/lib/messaging'
 import { useT } from '~/shared/lib/i18n'
 import { formatFolderPath } from '~/shared/utils/bookmark-tree'
 import type { FolderSummary } from '~/shared/types/messages'
+import {
+  buildFolderPathResolutionPreview,
+  buildFolderPathResolutions,
+  folderPathKey,
+  pickUniqueByDate,
+  type DuplicateDateStrategy,
+  type DuplicateFolderRuleMode,
+} from '~/shared/services/duplicate-service'
 
 function formatDate(ts: number | undefined): string | null {
   if (!ts) return null
@@ -46,35 +55,39 @@ function formatDate(ts: number | undefined): string | null {
 function BookmarkRow({
   bm,
   index,
-  isSafe,
+  folderRule,
   onKeep,
 }: {
   bm: BookmarkRecord | undefined
   index: number
-  isSafe: boolean
+  folderRule: DuplicateFolderRuleMode | null
   onKeep: () => void
 }) {
   const { t } = useT()
   const title = bm?.title || bm?.url || `Bookmark #${index + 1}`
   const path = bm ? formatFolderPath(bm.folderPath) : '—'
   const added = formatDate(bm?.dateAdded)
+  const isKeepRule = folderRule === 'keep'
+  const isTrashRule = folderRule === 'trash'
   return (
     <div
       className={cn(
         'px-3 py-2 flex items-center justify-between gap-2 border-b last:border-b-0 border-[var(--fw-border)]',
-        isSafe && status.success.soft,
+        isKeepRule && status.success.soft,
+        isTrashRule && status.danger.soft,
       )}
     >
       <Favicon url={bm?.url} size={16} framed className="flex-shrink-0" />
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-1.5">
           <p className="text-xs font-medium truncate">{title}</p>
-          {isSafe && <ShieldCheck className={cn('h-3 w-3 flex-shrink-0', status.success.icon)} />}
+          {isKeepRule && <ShieldCheck className={cn('h-3 w-3 flex-shrink-0', status.success.icon)} />}
+          {isTrashRule && <Trash2 className={cn('h-3 w-3 flex-shrink-0', status.danger.icon)} />}
         </div>
         {path && (
           <p className={cn(
             'text-[11px] mt-0.5 truncate',
-            isSafe ? status.success.text : 'text-[var(--fw-text-subtle)]',
+            isKeepRule ? status.success.text : isTrashRule ? status.danger.text : 'text-[var(--fw-text-subtle)]',
           )}>
             <span className="opacity-60">›</span> {path}
           </p>
@@ -113,16 +126,25 @@ export default function Duplicates({ scanResult, startScan, refreshScanResult }:
 
   // Folder-mode state
   const [folderPickerOpen, setFolderPickerOpen] = useState(false)
-  const [safeFolderKeys, setSafeFolderKeys] = useState<string[]>([])
+  const [folderRuleMode, setFolderRuleMode] = useState<DuplicateFolderRuleMode>('trash')
+  const [folderRuleKeys, setFolderRuleKeys] = useState<string[]>([])
   const [confirmFolderBulk, setConfirmFolderBulk] = useState(false)
 
   const groups = scanResult?.duplicateGroups ?? []
   const snapshot = scanResult?.bookmarkSnapshot ?? {}
+  const bookmarkMap = useMemo(() => new Map(Object.entries(snapshot)), [snapshot])
+  const bulkScopeGroups = useMemo(() => {
+    if (selectedGroups.size === 0) return groups
+    return groups.filter((group) => selectedGroups.has(group.id))
+  }, [groups, selectedGroups])
+  const bulkScopeLabel = selectedGroups.size > 0
+    ? t('dup.selectedGroupsScope', { count: selectedGroups.size })
+    : t('dup.allGroupsScope', { count: groups.length })
 
   // Available folders across all groups — fed to the picker
   const folderOptions = useMemo<FolderSummary[]>(() => {
     const seen = new Map<string, FolderSummary>()
-    for (const g of groups) {
+    for (const g of bulkScopeGroups) {
       for (const id of g.bookmarkIds) {
         const bm = snapshot[id]
         if (!bm?.folderPath || bm.folderPath.length === 0) continue
@@ -141,33 +163,24 @@ export default function Duplicates({ scanResult, startScan, refreshScanResult }:
       }
     }
     return Array.from(seen.values())
-  }, [groups, snapshot])
+  }, [bulkScopeGroups, snapshot])
 
-  const safeSet = useMemo(() => new Set(safeFolderKeys), [safeFolderKeys])
+  const folderRuleSet = useMemo(() => new Set(folderRuleKeys), [folderRuleKeys])
 
   const folderResolutions = useMemo(() => {
-    if (safeSet.size === 0) return []
-    return groups
-      .map((group) => {
-        const keep: string[] = []
-        const trash: string[] = []
-        for (const id of group.bookmarkIds) {
-          const bm = snapshot[id]
-          const key = bm?.folderPath?.join('/') ?? ''
-          if (key && safeSet.has(key)) keep.push(id)
-          else trash.push(id)
-        }
-        if (keep.length === 0 || trash.length === 0) return null
-        return { groupId: group.id, keepBookmarkIds: keep, trashBookmarkIds: trash }
-      })
-      .filter(Boolean) as Array<{
-        groupId: string
-        keepBookmarkIds: string[]
-        trashBookmarkIds: string[]
-      }>
-  }, [groups, snapshot, safeSet])
+    return buildFolderPathResolutions(bulkScopeGroups, snapshot, folderRuleSet, folderRuleMode)
+  }, [bulkScopeGroups, snapshot, folderRuleMode, folderRuleSet])
+  const folderPreview = useMemo(
+    () => buildFolderPathResolutionPreview(folderResolutions, snapshot),
+    [folderResolutions, snapshot],
+  )
+  const folderPreviewSummary = [
+    t('dup.groupsN', { count: folderPreview.groupCount }),
+    t('dup.toTrashN', { count: folderPreview.trashCount }),
+    t('dup.keptN', { count: folderPreview.keepCount }),
+  ].join(' · ')
 
-  const skippedCount = groups.length - folderResolutions.length
+  const skippedCount = bulkScopeGroups.length - folderResolutions.length
 
   if (!scanResult) {
     return (
@@ -213,17 +226,21 @@ export default function Duplicates({ scanResult, startScan, refreshScanResult }:
       return next
     })
 
-  const pickByDate = (group: DuplicateGroup, dir: 'oldest' | 'newest') => {
-    const sorted = [...group.bookmarkIds].sort((a, b) => {
-      const ta = snapshot[a]?.dateAdded ?? 0
-      const tb = snapshot[b]?.dateAdded ?? 0
-      return dir === 'oldest' ? ta - tb : tb - ta
-    })
-    return sorted[0]
+  const pickByDate = (group: DuplicateGroup, dir: DuplicateDateStrategy) => {
+    return pickUniqueByDate(group, bookmarkMap, dir)
   }
 
   const queueSingle = (group: DuplicateGroup, keepId: string, label: string) => {
     setPendingSingle({ group, keepIds: [keepId], label })
+  }
+
+  const queueByDate = (group: DuplicateGroup, dir: DuplicateDateStrategy, label: string) => {
+    const pick = pickByDate(group, dir)
+    if (!pick.id) {
+      toast.warning(t('dup.sameTimeUsePath'))
+      return
+    }
+    queueSingle(group, pick.id, label)
   }
 
   const handleConfirmSingle = async () => {
@@ -259,34 +276,53 @@ export default function Duplicates({ scanResult, startScan, refreshScanResult }:
     }
   }
 
-  const runBulkByStrategy = async (dir: 'oldest' | 'newest') => {
+  const runBulkByStrategy = async (dir: DuplicateDateStrategy) => {
     const ids = Array.from(selectedGroups)
     if (ids.length === 0) return
-    const resolutions = ids
-      .map((id) => groups.find((g) => g.id === id))
-      .filter((g): g is DuplicateGroup => !!g)
-      .map((g) => {
-        const keep = pickByDate(g, dir)
-        return {
-          groupId: g.id,
-          keepBookmarkIds: [keep],
-          trashBookmarkIds: g.bookmarkIds.filter((id) => id !== keep),
-        }
+    const resolutions: Array<{
+      groupId: string
+      keepBookmarkIds: string[]
+      trashBookmarkIds: string[]
+    }> = []
+    let ambiguousSkipped = 0
+    const ambiguousGroupIds: string[] = []
+
+    for (const id of ids) {
+      const group = groups.find((g) => g.id === id)
+      if (!group) continue
+      const keep = pickByDate(group, dir)
+      if (!keep.id) {
+        ambiguousSkipped++
+        ambiguousGroupIds.push(group.id)
+        continue
+      }
+      resolutions.push({
+        groupId: group.id,
+        keepBookmarkIds: [keep.id],
+        trashBookmarkIds: group.bookmarkIds.filter((bookmarkId) => bookmarkId !== keep.id),
       })
+    }
+
+    if (resolutions.length === 0) {
+      toast.warning(t('dup.dateAmbiguousAll', { count: ambiguousSkipped || ids.length }))
+      return
+    }
+
     setBulkResolving(true)
     try {
       const res = await send('duplicates.resolveBulk', { resolutions })
       if (res.ok) {
         await refreshScanResult()
-        setSelectedGroups(new Set())
+        setSelectedGroups(new Set(ambiguousGroupIds))
         const { resolvedCount, protectedSkipped, staleSkipped, failedCount } = res.data
         const msg = t('toast.resolvedGroupsBy', {
           count: resolvedCount,
           strategy: dir === 'newest' ? t('dup.newest') : t('dup.oldest'),
         })
         const otherFailed = failedCount - (protectedSkipped ?? 0) - (staleSkipped ?? 0)
-        if (protectedSkipped > 0 || staleSkipped > 0 || otherFailed > 0) {
+        if (ambiguousSkipped > 0 || protectedSkipped > 0 || staleSkipped > 0 || otherFailed > 0) {
           const parts = [msg]
+          if (ambiguousSkipped > 0) parts.push(t('dup.dateAmbiguousSkipped', { count: ambiguousSkipped }))
           if (protectedSkipped > 0) parts.push(t('common.protectedSkippedN', { count: protectedSkipped }))
           if (staleSkipped > 0) parts.push(t('common.changedSinceScanN', { count: staleSkipped }))
           if (otherFailed > 0) parts.push(t('common.failedN', { count: otherFailed }))
@@ -307,7 +343,8 @@ export default function Duplicates({ scanResult, startScan, refreshScanResult }:
       const res = await send('duplicates.resolveBulk', { resolutions: folderResolutions })
       if (res.ok) {
         await refreshScanResult()
-        setSafeFolderKeys([])
+        setFolderRuleKeys([])
+        setSelectedGroups(new Set())
         const { resolvedCount, trashedCount, protectedSkipped, staleSkipped, failedCount } = res.data
         const msg = `${t('toast.resolvedGroups', { count: resolvedCount })} · ${t('toast.trashedN', { count: trashedCount })}`
         const otherFailed = failedCount - (protectedSkipped ?? 0) - (staleSkipped ?? 0)
@@ -352,62 +389,76 @@ export default function Duplicates({ scanResult, startScan, refreshScanResult }:
           <Badge variant="warning" className="ml-1">{t('dup.copiesN', { count: summaryCopies })}</Badge>
         </div>
         <Button
-          variant={safeFolderKeys.length > 0 ? 'default' : 'outline'}
+          variant={folderRuleKeys.length > 0 ? 'default' : 'outline'}
           size="sm"
           onClick={() => setFolderPickerOpen(true)}
           aria-label={t('dup.byFolder')}
           className="gap-1 h-7 px-2 text-xs"
         >
           <Layers className="h-3 w-3" />
-          {t('dup.byFolder')} {safeFolderKeys.length > 0 ? `(${safeFolderKeys.length})` : ''}
+          {t('dup.byFolder')} {folderRuleKeys.length > 0 ? `(${folderRuleKeys.length})` : ''}
         </Button>
       </div>
 
       {/* Folder-mode resolution preview */}
-      {safeFolderKeys.length > 0 && (
+      {folderRuleKeys.length > 0 && (
         <div
           className={cn(
             'px-3 py-2 border-b border-[var(--fw-border)]',
-            status.success.soft,
+            folderRuleMode === 'keep' ? status.success.soft : status.danger.soft,
           )}
         >
-          <div className="flex items-start gap-2">
-            <IconBox Icon={ShieldCheck} tone="success" size="sm" />
+          <div className="flex items-start gap-2 min-w-0">
+            <IconBox Icon={folderRuleMode === 'keep' ? ShieldCheck : Trash2} tone={folderRuleMode === 'keep' ? 'success' : 'danger'} size="sm" />
             <div className="flex-1 min-w-0">
-              <p className="text-xs font-semibold">
-                {t('dup.safeFolders')} · {safeFolderKeys.length}
+              <div className="flex items-baseline gap-1.5 min-w-0">
+                <p className="text-xs font-semibold truncate">
+                  {t(folderRuleMode === 'keep' ? 'dup.safeFolders' : 'dup.trashFolders')}
+                </p>
+                <span className="text-[10.5px] opacity-70 flex-shrink-0">
+                  · {folderRuleKeys.length}
+                </span>
+              </div>
+              <p className="text-[10.5px] mt-0.5 opacity-75 truncate">
+                {bulkScopeLabel}
               </p>
-              <p className="text-[11px] mt-0.5 opacity-80">
+              <p
+                data-fw-dup-folder-preview
+                className="text-[11px] mt-1 font-medium leading-snug"
+              >
                 {folderResolutions.length > 0 ? (
                   <>
-                    <strong>{folderResolutions.length}</strong> {t('common.nItems', { count: folderResolutions.length })}
+                    {t('dup.willResolveN', { count: folderPreview.groupCount })}
+                    {' · '}{t('dup.toTrashN', { count: folderPreview.trashCount })}
+                    {' · '}{t('dup.keptN', { count: folderPreview.keepCount })}
                     {skippedCount > 0 && <span> · {t('common.skippedN', { count: skippedCount })}</span>}
                   </>
                 ) : (
-                  <span>{t('dup.noSafeMatch')}</span>
+                  <span>{t(folderRuleMode === 'keep' ? 'dup.noSafeMatch' : 'dup.noTrashMatch')}</span>
                 )}
               </p>
-            </div>
-            <div className="flex items-center gap-1">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setSafeFolderKeys([])}
-                className="h-6 px-2 text-[11px]"
-              >
-                {t('common.clear')}
-              </Button>
-              {folderResolutions.length > 0 && (
+              <div className="mt-2 flex items-center gap-1.5">
                 <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setFolderRuleKeys([])}
+                  className="h-6 px-2 text-[11px] flex-shrink-0"
+                >
+                  {t('common.clear')}
+                </Button>
+                {folderResolutions.length > 0 && (
+                <Button
+                  variant={folderRuleMode === 'keep' ? 'success' : 'destructive'}
                   size="sm"
                   onClick={() => setConfirmFolderBulk(true)}
                   disabled={bulkResolving}
-                  className="gap-1 h-6 px-2 text-[11px]"
+                  className="gap-1 h-6 px-2 text-[11px] flex-1 min-w-0"
                 >
                   <Check className="h-3 w-3" />
-                  {t('dup.resolve', { count: folderResolutions.length })}
+                  <span className="truncate">{t('dup.resolve', { count: folderResolutions.length })}</span>
                 </Button>
-              )}
+                )}
+              </div>
             </div>
           </div>
         </div>
@@ -423,9 +474,13 @@ export default function Duplicates({ scanResult, startScan, refreshScanResult }:
             const isSelected = selectedGroups.has(group.id)
             const resolution = folderResolutions.find((r) => r.groupId === group.id)
             const wouldResolve = !!resolution
+            const newestPick = pickByDate(group, 'newest')
+            const oldestPick = pickByDate(group, 'oldest')
+            const hasDateTie = newestPick.ambiguous || oldestPick.ambiguous
             return (
               <div
                 key={group.id}
+                data-fw-duplicate-group-id={group.id}
                 className={cn(
                   'rounded-[var(--fw-radius-lg)] border overflow-hidden transition-colors bg-[var(--fw-surface)]',
                   wouldResolve
@@ -462,6 +517,18 @@ export default function Duplicates({ scanResult, startScan, refreshScanResult }:
                     <Badge variant={wouldResolve ? 'success' : 'warning'} className="flex-shrink-0">
                       {group.bookmarkIds.length}
                     </Badge>
+                    {hasDateTie && (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Badge variant="outline" className="flex-shrink-0 normal-case tracking-normal">
+                            {t('dup.sameTimeBadge')}
+                          </Badge>
+                        </TooltipTrigger>
+                        <TooltipContent side="bottom">
+                          {t('dup.sameTimeUsePath')}
+                        </TooltipContent>
+                      </Tooltip>
+                    )}
                     {isOpen ? (
                       <ChevronDown className="h-3.5 w-3.5 text-[var(--fw-text-subtle)] flex-shrink-0" />
                     ) : (
@@ -477,9 +544,12 @@ export default function Duplicates({ scanResult, startScan, refreshScanResult }:
                         variant="ghost"
                         size="sm"
                         onClick={() =>
-                          queueSingle(group, pickByDate(group, 'newest'), t('dup.keepNewest'))
+                          queueByDate(group, 'newest', t('dup.keepNewest'))
                         }
-                        className="h-5 px-1.5 text-[10.5px] gap-0.5"
+                        className={cn(
+                          'h-5 px-1.5 text-[10.5px] gap-0.5',
+                          newestPick.ambiguous && 'opacity-60',
+                        )}
                         aria-label={t('dup.keepNewestHint')}
                       >
                         <ArrowUp className="h-2.5 w-2.5" />
@@ -487,7 +557,7 @@ export default function Duplicates({ scanResult, startScan, refreshScanResult }:
                       </Button>
                     </TooltipTrigger>
                     <TooltipContent side="bottom">
-                      {t('dup.keepNewestTip')}
+                      {newestPick.ambiguous ? t('dup.sameTimeUsePath') : t('dup.keepNewestTip')}
                     </TooltipContent>
                   </Tooltip>
                   <Tooltip>
@@ -496,9 +566,12 @@ export default function Duplicates({ scanResult, startScan, refreshScanResult }:
                         variant="ghost"
                         size="sm"
                         onClick={() =>
-                          queueSingle(group, pickByDate(group, 'oldest'), t('dup.keepOldest'))
+                          queueByDate(group, 'oldest', t('dup.keepOldest'))
                         }
-                        className="h-5 px-1.5 text-[10.5px] gap-0.5"
+                        className={cn(
+                          'h-5 px-1.5 text-[10.5px] gap-0.5',
+                          oldestPick.ambiguous && 'opacity-60',
+                        )}
                         aria-label={t('dup.keepOldestHint')}
                       >
                         <ArrowDown className="h-2.5 w-2.5" />
@@ -506,7 +579,7 @@ export default function Duplicates({ scanResult, startScan, refreshScanResult }:
                       </Button>
                     </TooltipTrigger>
                     <TooltipContent side="bottom">
-                      {t('dup.keepOldestTip')}
+                      {oldestPick.ambiguous ? t('dup.sameTimeUsePath') : t('dup.keepOldestTip')}
                     </TooltipContent>
                   </Tooltip>
                 </div>
@@ -515,15 +588,14 @@ export default function Duplicates({ scanResult, startScan, refreshScanResult }:
                   <div className="border-t border-[var(--fw-border)]">
                     {group.bookmarkIds.map((id, i) => {
                       const bm = snapshot[id]
-                      const isSafe =
-                        safeSet.size > 0 && !!bm?.folderPath &&
-                        safeSet.has(bm.folderPath.join('/'))
+                      const matchesRule = folderRuleSet.size > 0 && folderRuleSet.has(folderPathKey(bm))
+                      const folderRule = matchesRule ? folderRuleMode : null
                       return (
                         <BookmarkRow
                           key={id}
                           bm={bm}
                           index={i}
-                          isSafe={isSafe}
+                          folderRule={folderRule}
                           onKeep={() => queueSingle(group, id, t('dup.keepThisCopy'))}
                         />
                       )
@@ -538,33 +610,49 @@ export default function Duplicates({ scanResult, startScan, refreshScanResult }:
 
       {/* Bulk bar */}
       {selectedGroups.size > 0 && (
-        <div className="px-3 py-2 bg-[var(--fw-surface)] border-t border-[var(--fw-border)] flex items-center justify-between gap-2 flex-shrink-0">
-          <span className="text-xs text-[var(--fw-text-muted)] font-medium">
-            {t('common.selected', { count: selectedGroups.size })}
-          </span>
-          <div className="flex gap-1.5">
+        <div className="px-3 py-2 bg-[var(--fw-surface)] border-t border-[var(--fw-border)] flex flex-col gap-2 flex-shrink-0">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-xs text-[var(--fw-text-muted)] font-medium">
+              {t('common.selected', { count: selectedGroups.size })}
+            </span>
+            <Button variant="ghost" size="sm" onClick={() => setSelectedGroups(new Set())}>
+              {t('common.clear')}
+            </Button>
+          </div>
+          <div className="grid grid-cols-3 gap-1.5">
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={() => {
+                setFolderRuleMode('trash')
+                setFolderPickerOpen(true)
+              }}
+              disabled={bulkResolving}
+              data-fw-dup-path-cleanup
+              className="gap-1 min-w-0 px-1.5"
+            >
+              <Trash2 className="h-3 w-3 flex-shrink-0" />
+              <span className="truncate">{t('dup.pathCleanup')}</span>
+            </Button>
             <Button
               variant="outline"
               size="sm"
               onClick={() => runBulkByStrategy('newest')}
               disabled={bulkResolving}
-              className="gap-1"
+              className="gap-1 min-w-0 px-1.5"
             >
               <ArrowUp className="h-3 w-3" />
-              {t('dup.keepNewest')}
+              <span className="truncate">{t('dup.newest')}</span>
             </Button>
             <Button
               variant="outline"
               size="sm"
               onClick={() => runBulkByStrategy('oldest')}
               disabled={bulkResolving}
-              className="gap-1"
+              className="gap-1 min-w-0 px-1.5"
             >
               <ArrowDown className="h-3 w-3" />
-              {t('dup.keepOldest')}
-            </Button>
-            <Button variant="ghost" size="sm" onClick={() => setSelectedGroups(new Set())}>
-              {t('common.clear')}
+              <span className="truncate">{t('dup.oldest')}</span>
             </Button>
           </div>
         </div>
@@ -611,40 +699,89 @@ export default function Duplicates({ scanResult, startScan, refreshScanResult }:
       <FolderPickerDialog
         open={folderPickerOpen}
         onOpenChange={setFolderPickerOpen}
-        title={t('dup.pickSafeFolders')}
-        description={t('dup.safeFolders')}
-        value={safeFolderKeys}
-        onChange={setSafeFolderKeys}
+        title={t('dup.pickFolderRules')}
+        description={t(folderRuleMode === 'keep' ? 'dup.keepFoldersDesc' : 'dup.trashFoldersDesc')}
+        value={folderRuleKeys}
+        onChange={setFolderRuleKeys}
         valueKey="path"
         multiple
         confirmLabel={t('common.apply')}
         folders={folderOptions}
+        searchPlaceholder={t('dup.folderSearchPlaceholder')}
+        topContent={
+          <div className="mt-3 space-y-2">
+            <div className="grid grid-cols-2 gap-1 rounded-[var(--fw-radius-md)] bg-[var(--fw-bg-subtle)] p-1 border border-[var(--fw-border)]">
+              <Button
+                type="button"
+                variant={folderRuleMode === 'trash' ? 'destructive' : 'ghost'}
+                size="sm"
+                onClick={() => setFolderRuleMode('trash')}
+                className="h-7"
+              >
+                <Trash2 className="h-3 w-3" />
+                {t('dup.trashFolders')}
+              </Button>
+              <Button
+                type="button"
+                variant={folderRuleMode === 'keep' ? 'success' : 'ghost'}
+                size="sm"
+                onClick={() => setFolderRuleMode('keep')}
+                className="h-7"
+              >
+                <ShieldCheck className="h-3 w-3" />
+                {t('dup.safeFolders')}
+              </Button>
+            </div>
+            <p className="text-[11px] text-[var(--fw-text-muted)]">
+              {bulkScopeLabel}
+            </p>
+          </div>
+        }
       />
 
       {/* Folder bulk confirm */}
       <ConfirmDialog
         open={confirmFolderBulk}
         onOpenChange={(o) => !o && setConfirmFolderBulk(false)}
-        title={t('dup.confirmFolderTitle', { count: folderResolutions.length })}
-        description={t('dup.confirmFolderDesc')}
+        title={t(folderRuleMode === 'keep' ? 'dup.confirmFolderTitle' : 'dup.confirmTrashFolderTitle', { count: folderResolutions.length })}
+        description={t(folderRuleMode === 'keep' ? 'dup.confirmFolderDesc' : 'dup.confirmTrashFolderDesc')}
         preview={
-          <PreviewList
-            items={safeFolderKeys.map((k) => (
-              <span className="flex items-center gap-1.5">
-                <FolderOpen className={cn('h-3 w-3 flex-shrink-0', status.success.icon)} />
-                <span className="truncate">{k.replaceAll('/', ' / ')}</span>
-              </span>
-            ))}
-          />
+          <div className="space-y-2">
+            <div className={cn('rounded-[var(--fw-radius-md)] px-2.5 py-1.5 text-xs', status.warning.soft)}>
+              {folderPreviewSummary}
+            </div>
+            <PreviewList
+              items={[
+                ...folderRuleKeys.map((k) => (
+                  <span className="flex items-center gap-1.5">
+                    {folderRuleMode === 'keep' ? (
+                      <FolderOpen className={cn('h-3 w-3 flex-shrink-0', status.success.icon)} />
+                    ) : (
+                      <Trash2 className={cn('h-3 w-3 flex-shrink-0', status.danger.icon)} />
+                    )}
+                    <span className="truncate">{k.replaceAll('/', ' / ')}</span>
+                  </span>
+                )),
+                ...folderPreview.items.map((item) => (
+                  <span className="flex items-center gap-1.5">
+                    <Trash2 className={cn('h-3 w-3 flex-shrink-0', status.danger.icon)} />
+                    <span className="truncate">
+                      {item.title}{item.path ? ` · ${item.path}` : ''}
+                    </span>
+                  </span>
+                )),
+              ]}
+            />
+          </div>
         }
         footerNote={
           skippedCount > 0
-            ? t('dup.groupsSkippedNoSafe', { count: skippedCount })
+            ? t(folderRuleMode === 'keep' ? 'dup.groupsSkippedNoSafe' : 'dup.groupsSkippedNoTrash', { count: skippedCount })
             : undefined
         }
-        confirmLabel={t('dup.confirmFolderLabel')}
-        ConfirmIcon={ShieldCheck}
-        tone="success"
+        confirmLabel={t(folderRuleMode === 'keep' ? 'dup.confirmFolderLabel' : 'dup.confirmTrashFolderLabel')}
+        ConfirmIcon={folderRuleMode === 'keep' ? ShieldCheck : Trash2}
+        tone={folderRuleMode === 'keep' ? 'success' : 'danger'}
         onConfirm={handleConfirmFolderBulk}
       />
     </div>

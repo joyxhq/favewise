@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react'
 import { FolderOpen, Search, X, Check, Sparkles } from 'lucide-react'
 import {
   AlertDialog,
@@ -31,6 +31,8 @@ interface FolderPickerDialogProps {
   confirmLabel?: string
   /** Pre-fetched folders. If omitted, will fetch via `folders.get`. */
   folders?: FolderSummary[]
+  searchPlaceholder?: string
+  topContent?: ReactNode
   /**
    * When true, sort folders by "messiness score" (lots of direct links,
    * few subfolders) descending. Surfaces the folders most worth organizing
@@ -51,6 +53,8 @@ export function FolderPickerDialog({
   confirmLabel,
   folders: foldersProp,
   sortByMessiness = false,
+  searchPlaceholder,
+  topContent,
 }: FolderPickerDialogProps) {
   const { t } = useT()
   const resolvedTitle = title ?? t('inbox.pickFolder')
@@ -59,6 +63,7 @@ export function FolderPickerDialog({
   const [loading, setLoading] = useState(false)
   const [draft, setDraft] = useState<Set<string>>(new Set(value))
   const [search, setSearch] = useState('')
+  const [anchorIndex, setAnchorIndex] = useState<number | null>(null)
 
   // When a list was supplied, always use the freshest prop value.
   // Otherwise fall back to what we lazy-fetched.
@@ -81,8 +86,15 @@ export function FolderPickerDialog({
 
   // Sync draft with external value each time dialog opens
   useEffect(() => {
-    if (open) setDraft(new Set(value))
+    if (open) {
+      setDraft(new Set(value))
+      setAnchorIndex(null)
+    }
   }, [open, value])
+
+  useEffect(() => {
+    setAnchorIndex(null)
+  }, [search])
 
   const filtered = useMemo(() => {
     let all = folders
@@ -113,18 +125,44 @@ export function FolderPickerDialog({
   }, [folders, search, sortByMessiness])
 
   const keyOf = (f: { id: string; pathKey: string }) => (valueKey === 'id' ? f.id : f.pathKey)
+  const filteredKeys = useMemo(() => filtered.map((f) => keyOf(f)), [filtered, valueKey])
+  const selectedFilteredCount = useMemo(
+    () => filteredKeys.filter((key) => draft.has(key)).length,
+    [draft, filteredKeys],
+  )
+  const hasSearch = search.trim().length > 0
+  const allFilteredSelected =
+    multiple && filteredKeys.length > 0 && selectedFilteredCount === filteredKeys.length
+  const showSelectionTools = draft.size > 0 || (multiple && hasSearch && filteredKeys.length > 0)
 
-  const toggle = (key: string) => {
+  const selectAt = (
+    index: number,
+    modifiers: { shiftKey?: boolean; metaKey?: boolean; ctrlKey?: boolean } = {},
+  ) => {
+    const key = filteredKeys[index]
+    if (!key) return
+
     setDraft((prev) => {
       const next = new Set(prev)
-      if (multiple) {
-        next.has(key) ? next.delete(key) : next.add(key)
-      } else {
+      if (!multiple) {
         next.clear()
         next.add(key)
+        return next
       }
+
+      if (modifiers.shiftKey && anchorIndex !== null) {
+        const start = Math.min(anchorIndex, index)
+        const end = Math.max(anchorIndex, index)
+        filteredKeys.slice(start, end + 1).forEach((rangeKey) => next.add(rangeKey))
+        return next
+      }
+
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
       return next
     })
+
+    if (!modifiers.shiftKey) setAnchorIndex(index)
   }
 
   const confirm = () => {
@@ -132,9 +170,59 @@ export function FolderPickerDialog({
     onOpenChange(false)
   }
 
+  const toggleFiltered = () => {
+    if (!multiple || filteredKeys.length === 0) return
+    setDraft((prev) => {
+      const next = new Set(prev)
+      if (allFilteredSelected) {
+        filteredKeys.forEach((key) => next.delete(key))
+      } else {
+        filteredKeys.forEach((key) => next.add(key))
+      }
+      return next
+    })
+  }
+
+  const selectFiltered = () => {
+    if (!multiple || filteredKeys.length === 0) return
+    setDraft((prev) => {
+      const next = new Set(prev)
+      filteredKeys.forEach((key) => next.add(key))
+      return next
+    })
+    setAnchorIndex(0)
+  }
+
+  const onDialogKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (!multiple) return
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'a') {
+      event.preventDefault()
+      selectFiltered()
+    }
+  }
+
+  const onRowKeyDown = (index: number, event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return
+    event.preventDefault()
+    selectAt(index, {
+      shiftKey: event.shiftKey,
+      metaKey: event.metaKey,
+      ctrlKey: event.ctrlKey,
+    })
+  }
+
+  const onRowClick = (index: number, event: MouseEvent<HTMLElement>) => {
+    event.preventDefault()
+    selectAt(index, {
+      shiftKey: event.shiftKey,
+      metaKey: event.metaKey,
+      ctrlKey: event.ctrlKey,
+    })
+  }
+
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
-      <AlertDialogContent className="max-w-md p-0">
+      <AlertDialogContent className="max-w-md p-0" onKeyDown={onDialogKeyDown}>
         <div className="p-5 pb-3">
           <AlertDialogHeader>
             <AlertDialogTitle>{resolvedTitle}</AlertDialogTitle>
@@ -142,6 +230,7 @@ export function FolderPickerDialog({
               ? <AlertDialogDescription>{description}</AlertDialogDescription>
               : <AlertDialogDescription className="sr-only">{resolvedTitle}</AlertDialogDescription>}
           </AlertDialogHeader>
+          {topContent}
 
           {/* Search — sticky at top of dialog */}
           <div className="relative mt-3">
@@ -149,7 +238,7 @@ export function FolderPickerDialog({
             <Input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder={t('lib.searchPlaceholder')}
+              placeholder={searchPlaceholder ?? t('folderPicker.searchPlaceholder')}
               className="pl-7 pr-7 h-7"
               autoFocus
             />
@@ -164,10 +253,23 @@ export function FolderPickerDialog({
             )}
           </div>
 
-          {draft.size > 0 && (
-            <p className="text-xs text-[var(--fw-text-muted)] mt-2">
-              {t('common.selected', { count: draft.size })}
-            </p>
+          {showSelectionTools && (
+            <div className="mt-2 flex items-center justify-between gap-2">
+              <p className="text-xs text-[var(--fw-text-muted)]">
+                {draft.size > 0 ? t('common.selected', { count: draft.size }) : t('common.nItems', { count: filteredKeys.length })}
+              </p>
+              {multiple && filteredKeys.length > 0 && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={toggleFiltered}
+                  className="h-5 px-1.5 text-[11px]"
+                >
+                  {allFilteredSelected ? t('common.deselectMatches') : t('common.selectMatches')}
+                </Button>
+              )}
+            </div>
           )}
         </div>
 
@@ -177,17 +279,36 @@ export function FolderPickerDialog({
             <div className="p-6 text-xs text-[var(--fw-text-subtle)] text-center">{t('common.loading')}</div>
           ) : filtered.length === 0 ? (
             <div className="p-6 text-xs text-[var(--fw-text-subtle)] text-center">
-              {t('lib.noneMatch', { query: search })}
+              {t('folderPicker.noneMatch', { query: search })}
             </div>
           ) : (
-            <div className="divide-y divide-[var(--fw-border)]">
+            <div role="listbox" aria-multiselectable={multiple} className="divide-y divide-[var(--fw-border)]">
               {filtered.map((f, idx) => {
                 const k = keyOf(f)
                 const checked = draft.has(k)
                 const messy = sortByMessiness && idx < 5 && f.messiness >= 10
+                const parentLabel = f.folderPath.filter(Boolean).join(' / ')
+                const countLabel =
+                  (f.directLinkCount ?? 0) + (f.directSubfolderCount ?? 0) > 0
+                    ? [
+                        t('common.linksN', { count: f.directLinkCount ?? 0 }),
+                        (f.directSubfolderCount ?? 0) > 0
+                          ? t('common.subfoldersN', { count: f.directSubfolderCount ?? 0 })
+                          : null,
+                      ].filter(Boolean).join(' · ')
+                    : ''
+                const metaLabel = [parentLabel, countLabel].filter(Boolean).join(' · ')
                 return (
-                  <label
+                  <div
                     key={k}
+                    title={f.fullLabel || f.title}
+                    role="option"
+                    aria-selected={checked}
+                    data-fw-folder-picker-row
+                    data-fw-folder-picker-key={k}
+                    tabIndex={0}
+                    onClick={(event) => onRowClick(idx, event)}
+                    onKeyDown={(event) => onRowKeyDown(idx, event)}
                     className={cn(
                       'flex items-center gap-2.5 px-3 py-2 cursor-pointer transition-colors',
                       checked
@@ -197,7 +318,11 @@ export function FolderPickerDialog({
                   >
                     <Checkbox
                       checked={checked}
-                      onCheckedChange={() => toggle(k)}
+                      tabIndex={-1}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        onRowClick(idx, event)
+                      }}
                       aria-label={t('common.selectItem', { name: f.fullLabel })}
                     />
                     <FolderOpen
@@ -207,12 +332,10 @@ export function FolderPickerDialog({
                       )}
                     />
                     <div className="flex-1 min-w-0">
-                      <p className="text-xs truncate">{f.fullLabel || f.title}</p>
-                      {(f.directLinkCount ?? 0) + (f.directSubfolderCount ?? 0) > 0 && (
+                      <p className="text-xs truncate">{f.title || f.fullLabel}</p>
+                      {metaLabel && (
                         <p className="text-[10.5px] text-[var(--fw-text-subtle)] truncate mt-0.5">
-                          {t('common.linksN', { count: f.directLinkCount ?? 0 })}
-                          {(f.directSubfolderCount ?? 0) > 0 &&
-                            ` · ${t('common.subfoldersN', { count: f.directSubfolderCount ?? 0 })}`}
+                          {metaLabel}
                         </p>
                       )}
                     </div>
@@ -222,7 +345,7 @@ export function FolderPickerDialog({
                         {t('common.messy')}
                       </Badge>
                     )}
-                  </label>
+                  </div>
                 )
               })}
             </div>
