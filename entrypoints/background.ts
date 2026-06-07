@@ -90,6 +90,7 @@ import {
 import { buildBookmarkMap, flattenBookmarkTree } from '~/shared/utils/bookmark-tree'
 import { mapLimit } from '~/shared/lib/concurrency'
 import { createDispatcher, ok, err, broadcast, type HandlerMap } from '~/shared/lib/messaging'
+import { getBrowserSystemFolderIds } from '~/shared/lib/system-folders'
 import { ERROR_CODES } from '~/shared/types/messages'
 import type { TrashEntry, OperationLogEntry, ScanResult } from '~/shared/types'
 import { hashStr, expandProtectedSubtree } from '~/shared/lib/protected-folders'
@@ -136,6 +137,17 @@ const RECORD_KEYS = new Set<string>([
   STORAGE_KEYS.ORGANIZE_PLACEMENTS,
   STORAGE_KEYS.BOOKMARK_TAGS,
 ])
+
+async function getLatestScanForUi(): Promise<ScanResult | null> {
+  const scan = await getLatestScan()
+  if (!scan?.emptyFolders?.length) return scan
+
+  const systemFolderIds = getBrowserSystemFolderIds(await getAllBookmarks())
+  const emptyFolders = scan.emptyFolders.filter((folder) => !systemFolderIds.has(folder.id))
+  if (emptyFolders.length === scan.emptyFolders.length) return scan
+
+  return { ...scan, emptyFolders }
+}
 
 function byteSize(value: unknown): number {
   return new Blob([typeof value === 'string' ? value : JSON.stringify(value ?? null)]).size
@@ -220,7 +232,7 @@ const handlers: HandlerMap = {
     // so the UI refreshes without the user waiting for a no-op scan.
     if (!payload?.force) {
       const dirty = await isBookmarkTreeDirty()
-      const cached = await getLatestScan()
+      const cached = await getLatestScanForUi()
       if (!dirty && cached && cached.status === 'completed') {
         // Fire-and-forget broadcast so sidepanel updates its state.
         setTimeout(() => {
@@ -248,7 +260,7 @@ const handlers: HandlerMap = {
   'scan.status.get': async () =>
     ok({ isScanning: isScanning(), isCheckingDeadLinks: isDeadLinksChecking() }),
 
-  'scan.latest.get': async () => ok(await getLatestScan()),
+  'scan.latest.get': async () => ok(await getLatestScanForUi()),
 
   /* ----- Dead-links task ----- */
 
@@ -966,7 +978,7 @@ const handlers: HandlerMap = {
   /* ----- Empty folders ----- */
 
   'emptyFolders.get': async () => {
-    const scan = await getLatestScan()
+    const scan = await getLatestScanForUi()
     return ok(scan?.emptyFolders ?? [])
   },
 
@@ -979,6 +991,7 @@ const handlers: HandlerMap = {
     // that IS protected itself.
     const allRecords = await getAllBookmarks()
     const settings = await getSettings()
+    const systemFolderIds = getBrowserSystemFolderIds(allRecords)
     const protectedSubtree = expandProtectedSubtree(
       allRecords,
       settings.protectedFolderIds ?? [],
@@ -988,6 +1001,10 @@ const handlers: HandlerMap = {
     let staleSkipped = 0
     let nonEmptySkipped = 0
     for (const id of folderIds) {
+      if (systemFolderIds.has(id)) {
+        staleSkipped++
+        continue
+      }
       if (protectedSubtree.has(id)) {
         protectedSkipped++
         continue

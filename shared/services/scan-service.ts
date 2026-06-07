@@ -14,6 +14,7 @@ import {
   saveLatestScan,
 } from '~/shared/storage'
 import { buildBookmarkMap, getBookmarkLinks } from '~/shared/utils/bookmark-tree'
+import { getBrowserSystemFolderIds } from '~/shared/lib/system-folders'
 import type {
   BookmarkRecord,
   EmptyFolder,
@@ -29,16 +30,13 @@ type DeadLinksProgressCallback = (event: {
   status: 'checking' | 'paused' | 'completed'
 }) => void
 
-/** Chrome system folder IDs that should never be reported as empty */
-const SYSTEM_FOLDER_IDS = new Set(['0', '1', '2', '3'])
-
 /**
  * Detect empty folders (including "deep empty" folders — a folder whose
  * entire subtree contains zero bookmark links, regardless of sub-folder
  * depth). Returns the top-most empty folder in each branch so the user
  * can collapse a whole empty subtree with one action.
  */
-function findEmptyFolders(allRecords: BookmarkRecord[]): EmptyFolder[] {
+export function findEmptyFolders(allRecords: BookmarkRecord[]): EmptyFolder[] {
   // Group children by parentId
   const childrenOf = new Map<string, BookmarkRecord[]>()
   for (const r of allRecords) {
@@ -61,10 +59,12 @@ function findEmptyFolders(allRecords: BookmarkRecord[]): EmptyFolder[] {
     return false
   }
 
+  const systemFolderIds = getBrowserSystemFolderIds(allRecords)
+
   const emptyIds = new Set<string>()
   for (const r of allRecords) {
     if (r.url) continue
-    if (SYSTEM_FOLDER_IDS.has(r.id)) continue
+    if (systemFolderIds.has(r.id)) continue
     if (r.title === 'Favewise Trash') continue
     if (!hasLink(r.id)) emptyIds.add(r.id)
   }
