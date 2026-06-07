@@ -3,6 +3,34 @@
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Version numbers follow [SemVer](https://semver.org/) and are shared with `package.json` → `manifest.json` (single source of truth).
 
+## [1.1.0] — 2026-06-07
+
+### Added
+
+- **Path-based duplicate cleanup** — pick folder rules to trash matching copies (for imported paths such as `Imported`) or keep copies inside safe folders, with safeguards that always leave one recoverable keeper.
+- **Scoped duplicate cleanup** — folder rules now apply to the currently selected duplicate groups when a selection exists, or all groups when nothing is selected.
+- **Bulk folder selection gestures** in folder pickers: Cmd/Ctrl+A selects current matches, Shift-click selects ranges, and Cmd/Ctrl-click toggles non-contiguous rows.
+- **Duplicate cleanup preview and confirmation** showing affected groups, copies to trash, kept copies, and skipped groups before destructive changes run.
+
+### Changed
+
+- Keep-Newest / Keep-Oldest now skip same-timestamp duplicate groups instead of guessing; ambiguous groups show a "Same time" badge and point users toward path cleanup.
+- Duplicate folder-rule status now uses a compact summary bar in the side panel, with detailed item previews reserved for the confirmation dialog.
+- Folder picker rows now show folder name first and parent path as secondary text, making repeated imported paths easier to scan.
+- Chrome package metadata now uses the clearer title "Favewise - Bookmark Cleaner & Organizer" and a concrete short description that keeps the "Make bookmarks useful again" tagline.
+
+### Fixed
+
+- Duplicate-group refresh now validates the bookmark's current normalized URL against the group's canonical normalized URL, avoiding stale duplicate cleanup decisions after URL edits.
+- Imported-folder duplicate cleanup no longer treats matching path words as exclusions; selected path matches are explicitly trashable when another copy remains outside those paths.
+- Empty-folder cleanup no longer reports or deletes browser system containers such as Bookmarks Bar, Other Bookmarks, Mobile Bookmarks, or Firefox root bookmark folders.
+
+### Tests
+
+- Added unit coverage for normalized duplicate validation, path-rule cleanup, same-timestamp date ambiguity, and folder-rule previews.
+- Added unit coverage for empty-folder detection with empty browser root containers and nested user folders.
+- Added Playwright coverage for path cleanup, scoped destructive actions, Cmd/Ctrl+A selection, Shift range selection, and Cmd/Ctrl interval selection.
+
 ## [1.0.0] — 2026-05-09
 
 Initial public release.
